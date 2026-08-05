@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.property import PropertyRepository
 from app.services.geospatial_enrichment import PropertyGeospatialService
+from app.services.nearby_places import NearbyPlaceEnrichment, NearbyPlaceService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class EnrichmentStage(StrEnum):
 
     GEOCODE = "geocode"
     GEOMETRY = "geometry"
+    NEARBY = "nearby"
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class PropertyEnrichmentPipeline:
         batch_size: int,
         progress_interval: int,
         geospatial_service: PropertyGeospatialService | None = None,
+        nearby_place_service: NearbyPlaceService | None = None,
         retry_failed_cache: bool = False,
     ) -> None:
         self._session = session
@@ -51,6 +54,7 @@ class PropertyEnrichmentPipeline:
         self._batch_size = batch_size
         self._progress_interval = progress_interval
         self._geospatial_service = geospatial_service
+        self._nearby_place_service = nearby_place_service
         self._retry_failed_cache = retry_failed_cache
 
     async def run(self, stages: tuple[EnrichmentStage, ...]) -> list[StageRunSummary]:
@@ -61,6 +65,8 @@ class PropertyEnrichmentPipeline:
                 summaries.append(await self._run_geocode_stage())
             elif stage is EnrichmentStage.GEOMETRY:
                 summaries.append(await self._run_geometry_stage())
+            elif stage is EnrichmentStage.NEARBY:
+                summaries.append(await self._run_nearby_stage())
         return summaries
 
     async def _run_geocode_stage(self) -> StageRunSummary:
@@ -145,6 +151,77 @@ class PropertyEnrichmentPipeline:
             stage=EnrichmentStage.GEOMETRY,
             properties_processed=processed,
             properties_updated=updated,
+        )
+
+    async def _run_nearby_stage(self) -> StageRunSummary:
+        """Fill only missing nearby-place values from the cache-first Overpass service."""
+        if self._nearby_place_service is None:
+            raise RuntimeError("Nearby stage requires a configured NearbyPlaceService")
+        cursor: str | None = None
+        processed = updated = provider_queries = cache_hits = failed_requests = 0
+        next_progress_log = self._progress_interval
+        while True:
+            batch = await self._property_repository.list_missing_nearby_place_batch(
+                after_property_id=cursor,
+                batch_size=self._batch_size,
+            )
+            if not batch:
+                break
+            cursor = batch[-1].property_id
+            processed_in_batch = 0
+            deferred = False
+            try:
+                for property_record in batch:
+                    enrichment = await self._nearby_place_service.enrich_property(property_record)
+                    if enrichment.deferred:
+                        deferred = True
+                        break
+                    updated += await self._persist_nearby_result(property_record.property_id, enrichment)
+                    provider_queries += enrichment.provider_queries
+                    cache_hits += enrichment.cache_hits
+                    processed_in_batch += 1
+                await self._session.flush()
+                await self._session.commit()
+            except Exception:
+                await self._session.rollback()
+                failed_requests += 1
+                raise
+            processed += processed_in_batch
+            next_progress_log = self._log_progress(
+                EnrichmentStage.NEARBY,
+                processed,
+                updated,
+                next_progress_log,
+            )
+            if deferred:
+                self._nearby_place_service.log_resume_summary()
+                break
+        return StageRunSummary(
+            stage=EnrichmentStage.NEARBY,
+            properties_processed=processed,
+            properties_updated=updated,
+            provider_queries=provider_queries,
+            cache_hits=cache_hits,
+            failed_localities=failed_requests,
+        )
+
+    async def _persist_nearby_result(
+        self,
+        property_id: str,
+        enrichment: NearbyPlaceEnrichment,
+    ) -> int:
+        """Delegate the guarded property update while keeping the service database-agnostic."""
+        return await self._property_repository.fill_missing_nearby_places(
+            property_id,
+            nearest_metro=enrichment.metro.nearest.name if enrichment.metro.nearest else None,
+            nearest_metro_distance_m=enrichment.metro.nearest.distance_m if enrichment.metro.nearest else None,
+            nearest_hospital=enrichment.hospital.nearest.name if enrichment.hospital.nearest else None,
+            nearest_hospital_distance_m=enrichment.hospital.nearest.distance_m if enrichment.hospital.nearest else None,
+            nearest_school=enrichment.school.nearest.name if enrichment.school.nearest else None,
+            nearest_school_distance_m=enrichment.school.nearest.distance_m if enrichment.school.nearest else None,
+            nearest_park=enrichment.park.nearest.name if enrichment.park.nearest else None,
+            nearest_park_distance_m=enrichment.park.nearest.distance_m if enrichment.park.nearest else None,
+            nearby_park_count=enrichment.park.park_count,
         )
 
     def _log_progress(

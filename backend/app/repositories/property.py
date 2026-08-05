@@ -138,6 +138,80 @@ class PropertyRepository:
         )
         return list(result)
 
+    async def list_missing_nearby_place_batch(
+        self,
+        *,
+        after_property_id: str | None,
+        batch_size: int,
+    ) -> List[Property]:
+        """Return coordinate-complete records missing one or more nearby-place fields."""
+        filters = [
+            Property.latitude.is_not(None),
+            Property.longitude.is_not(None),
+            or_(
+                Property.nearest_metro.is_(None),
+                Property.nearest_hospital.is_(None),
+                Property.nearest_school.is_(None),
+                Property.nearest_park.is_(None),
+                Property.nearest_metro_distance_m.is_(None),
+                Property.nearest_hospital_distance_m.is_(None),
+                Property.nearest_school_distance_m.is_(None),
+                Property.nearest_park_distance_m.is_(None),
+                Property.nearby_park_count.is_(None),
+            ),
+        ]
+        if after_property_id is not None:
+            filters.append(Property.property_id > after_property_id)
+        result = await self._session.scalars(
+            select(Property).where(and_(*filters)).order_by(Property.property_id).limit(batch_size)
+        )
+        return list(result)
+
+    async def fill_missing_nearby_places(
+        self,
+        property_id: str,
+        *,
+        nearest_metro: str | None,
+        nearest_metro_distance_m: int | None,
+        nearest_hospital: str | None,
+        nearest_hospital_distance_m: int | None,
+        nearest_school: str | None,
+        nearest_school_distance_m: int | None,
+        nearest_park: str | None,
+        nearest_park_distance_m: int | None,
+        nearby_park_count: int | None,
+    ) -> int:
+        """Fill supplied nearby-place values only where the corresponding column is null."""
+        supplied_values = {
+            "nearest_metro": nearest_metro,
+            "nearest_metro_distance_m": nearest_metro_distance_m,
+            "nearest_hospital": nearest_hospital,
+            "nearest_hospital_distance_m": nearest_hospital_distance_m,
+            "nearest_school": nearest_school,
+            "nearest_school_distance_m": nearest_school_distance_m,
+            "nearest_park": nearest_park,
+            "nearest_park_distance_m": nearest_park_distance_m,
+            "nearby_park_count": nearby_park_count,
+        }
+        missing_targets = [
+            getattr(Property, name).is_(None)
+            for name, value in supplied_values.items()
+            if value is not None
+        ]
+        if not missing_targets:
+            return 0
+        values = {
+            name: func.coalesce(getattr(Property, name), value)
+            for name, value in supplied_values.items()
+            if value is not None
+        }
+        result = await self._session.execute(
+            update(Property)
+            .where(Property.property_id == property_id, or_(*missing_targets))
+            .values(**values)
+        )
+        return result.rowcount or 0
+
     async def repair_missing_geometry(self, property_ids: list[str]) -> int:
         """Regenerate geometry only where it is null and coordinate inputs are valid."""
         if not property_ids:

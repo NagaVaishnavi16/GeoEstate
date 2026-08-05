@@ -1,6 +1,7 @@
 """Persistence models exposed to SQLAlchemy metadata and Alembic."""
 
 from .geocode_cache import GeocodeCache
+from .nearby_place_cache import NearbyPlaceCache
 from .property import Property
 
-__all__ = ["GeocodeCache", "Property"]
+__all__ = ["GeocodeCache", "NearbyPlaceCache", "Property"]

@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import AsyncExitStack
 import logging
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import AsyncSessionFactory
 from app.repositories.geocode_cache import GeocodeCacheRepository
 from app.repositories.property import PropertyRepository
+from app.repositories.nearby_place_cache import NearbyPlaceCacheRepository
 from app.services.geocoding import NominatimGeocodingClient
 from app.services.enrichment_pipeline import EnrichmentStage, PropertyEnrichmentPipeline
 from app.services.geospatial_enrichment import (
     PropertyGeospatialService,
     get_geocoding_coverage_summary,
 )
+from app.services.nearby_places import NearbyPlaceService, OverpassClient
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool) -> None:
-    """Run Stage 1 and/or Stage 2 against PostgreSQL in committed batches."""
+    """Run implemented enrichment stages against PostgreSQL in committed batches."""
     settings = get_settings()
     effective_batch_size = batch_size or settings.enrichment_batch_size
     if effective_batch_size < 1:
@@ -49,17 +52,32 @@ async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool)
     async with AsyncSessionFactory() as session:
         property_repository = PropertyRepository(session)
         cache_repository = GeocodeCacheRepository(session)
-        if EnrichmentStage.GEOCODE in stages:
-            async with NominatimGeocodingClient(settings) as geocoding_client:
+        needs_geocoding = EnrichmentStage.GEOCODE in stages
+        needs_nearby = EnrichmentStage.NEARBY in stages
+        if needs_geocoding or needs_nearby:
+            async with AsyncExitStack() as stack:
+                geocoding_client = (
+                    await stack.enter_async_context(NominatimGeocodingClient(settings))
+                    if needs_geocoding
+                    else None
+                )
+                overpass_client = (
+                    await stack.enter_async_context(OverpassClient(settings))
+                    if needs_nearby
+                    else None
+                )
                 pipeline = PropertyEnrichmentPipeline(
                     session,
                     property_repository,
                     batch_size=effective_batch_size,
                     progress_interval=settings.enrichment_progress_interval,
-                    geospatial_service=PropertyGeospatialService(
-                        property_repository,
-                        cache_repository,
-                        geocoding_client,
+                    geospatial_service=(
+                        PropertyGeospatialService(property_repository, cache_repository, geocoding_client)
+                        if geocoding_client is not None else None
+                    ),
+                    nearby_place_service=(
+                        NearbyPlaceService(NearbyPlaceCacheRepository(session), overpass_client, settings)
+                        if overpass_client is not None else None
                     ),
                     retry_failed_cache=retry_failed_cache or settings.geocoding_retry_failed_cache,
                 )
@@ -80,7 +98,7 @@ async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool)
 
     for summary in summaries:
         LOGGER.info(
-            "enrichment_stage_complete stage=%s properties_processed=%d properties_updated=%d provider_queries=%d cache_hits=%d failed_localities=%d",
+            "enrichment_stage_complete stage=%s properties_processed=%d properties_updated=%d provider_queries=%d cache_hits=%d failed_items=%d",
             summary.stage.value,
             summary.properties_processed,
             summary.properties_updated,

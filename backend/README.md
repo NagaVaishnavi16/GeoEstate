@@ -60,6 +60,18 @@ The dedicated `PropertySearchService` receives a transport-neutral `PropertySear
 
 Run `alembic upgrade head` after adding the `GeoAlchemy2` dependency. The Phase 3 schema remains limited to the canonical dataset plus computed PostGIS geometry; resale and amenity fields are intentionally deferred until a verified source supplies them.
 
+## Enrichment pipeline — Stage 3 nearby places
+
+The same `scripts/enrich_geocodes.py` entry point now includes the `nearby` stage. It processes only coordinate-complete properties with at least one missing nearby-place field. For each rounded coordinate bucket, `NearbyPlaceService` checks PostgreSQL cache rows before making a rate-limited, bounded-retry Overpass query for metro stations, hospitals, schools, and parks. The nearest named feature and its WGS84 Haversine distance are stored; parks also receive a count inside the configured park-density radius. Guarded repository updates fill only null columns.
+
+```powershell
+cd backend
+alembic upgrade head
+python -m scripts.enrich_geocodes --stage nearby
+```
+
+`OVERPASS_*` settings in `.env` configure endpoint, throttling, timeout, retry/backoff, search radius, and park-count radius. The stage runs in 100-record transactions by default, commits each batch, and logs progress every 50 records. A stopped run resumes safely because committed rows are skipped and the durable cache prevents duplicate requests for already-resolved coordinate/category pairs.
+
 ## Setup
 
 From the repository root, install the declared dependencies. Then copy `.env.example` to `.env` inside `backend/` and set `DATABASE_URL` for PostgreSQL.

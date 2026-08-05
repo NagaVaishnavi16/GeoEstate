@@ -28,6 +28,12 @@ class PropertyBase(BaseModel):
     nearest_metro: str | None = Field(default=None, max_length=255)
     nearest_hospital: str | None = Field(default=None, max_length=255)
     nearest_school: str | None = Field(default=None, max_length=255)
+    nearest_park: str | None = Field(default=None, max_length=255)
+    nearest_metro_distance_m: int | None = Field(default=None, ge=0)
+    nearest_hospital_distance_m: int | None = Field(default=None, ge=0)
+    nearest_school_distance_m: int | None = Field(default=None, ge=0)
+    nearest_park_distance_m: int | None = Field(default=None, ge=0)
+    nearby_park_count: int | None = Field(default=None, ge=0)
     ai_summary: str | None = None
 
 
@@ -56,6 +62,12 @@ class PropertyUpdate(BaseModel):
     nearest_metro: str | None = Field(default=None, max_length=255)
     nearest_hospital: str | None = Field(default=None, max_length=255)
     nearest_school: str | None = Field(default=None, max_length=255)
+    nearest_park: str | None = Field(default=None, max_length=255)
+    nearest_metro_distance_m: int | None = Field(default=None, ge=0)
+    nearest_hospital_distance_m: int | None = Field(default=None, ge=0)
+    nearest_school_distance_m: int | None = Field(default=None, ge=0)
+    nearest_park_distance_m: int | None = Field(default=None, ge=0)
+    nearby_park_count: int | None = Field(default=None, ge=0)
     ai_summary: str | None = None
 
 
@@ -113,6 +125,12 @@ class FutureIntelligenceResponse(BaseModel):
     nearest_school: str | None = None
     nearest_hospital: str | None = None
     nearest_metro: str | None = None
+    nearest_park: str | None = None
+    nearest_metro_distance_m: int | None = None
+    nearest_hospital_distance_m: int | None = None
+    nearest_school_distance_m: int | None = None
+    nearest_park_distance_m: int | None = None
+    nearby_park_count: int | None = None
     green_score: Decimal | None = None
     satellite_analysis: dict[str, object] | None = None
 

@@ -21,6 +21,11 @@ class Property(Base):
         CheckConstraint("liveability_score IS NULL OR liveability_score BETWEEN 0 AND 100", name="ck_properties_liveability_score"),
         CheckConstraint("latitude IS NULL OR latitude BETWEEN 15.8 AND 19.9", name="ck_properties_telangana_latitude"),
         CheckConstraint("longitude IS NULL OR longitude BETWEEN 77.0 AND 81.3", name="ck_properties_telangana_longitude"),
+        CheckConstraint("nearby_park_count IS NULL OR nearby_park_count >= 0", name="ck_properties_nearby_park_count"),
+        CheckConstraint("nearest_metro_distance_m IS NULL OR nearest_metro_distance_m >= 0", name="ck_properties_nearest_metro_distance_m"),
+        CheckConstraint("nearest_hospital_distance_m IS NULL OR nearest_hospital_distance_m >= 0", name="ck_properties_nearest_hospital_distance_m"),
+        CheckConstraint("nearest_school_distance_m IS NULL OR nearest_school_distance_m >= 0", name="ck_properties_nearest_school_distance_m"),
+        CheckConstraint("nearest_park_distance_m IS NULL OR nearest_park_distance_m >= 0", name="ck_properties_nearest_park_distance_m"),
         Index("property_location_price_idx", "location", "price_lakh"),
     )
 
@@ -42,6 +47,12 @@ class Property(Base):
     nearest_metro: Mapped[str | None] = mapped_column(String(255), nullable=True)
     nearest_hospital: Mapped[str | None] = mapped_column(String(255), nullable=True)
     nearest_school: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    nearest_park: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    nearest_metro_distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nearest_hospital_distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nearest_school_distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nearest_park_distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nearby_park_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     geometry: Mapped[object | None] = mapped_column(Geometry(geometry_type="POINT", srid=4326, spatial_index=False), nullable=True)
 
