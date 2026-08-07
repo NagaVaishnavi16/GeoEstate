@@ -268,6 +268,26 @@ class PropertyRepository:
         if criteria.max_area is not None:
             filters.append(Property.area_sqft <= criteria.max_area)
 
+        if criteria.property_type:
+            filters.append(Property.title.ilike(f"%{criteria.property_type.strip()}%"))
+
+        if criteria.building_status:
+            filters.append(
+                func.lower(Property.building_status) == criteria.building_status.strip().casefold()
+            )
+
+        if criteria.near_metro:
+            filters.append(Property.nearest_metro.is_not(None))
+
+        if criteria.near_hospital:
+            filters.append(Property.nearest_hospital.is_not(None))
+
+        if criteria.near_school:
+            filters.append(Property.nearest_school.is_not(None))
+
+        if criteria.near_park:
+            filters.append(Property.nearest_park.is_not(None))
+
         sort_columns = {
             PropertySortField.PRICE: Property.price_lakh,
             PropertySortField.AREA: Property.area_sqft,

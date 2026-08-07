@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     overpass_retry_backoff_seconds: float = Field(default=2.0, gt=0)
     overpass_search_radius_m: int = Field(default=10_000, ge=100, le=50_000)
     overpass_park_count_radius_m: int = Field(default=2_000, ge=100, le=10_000)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: float = Field(default=20.0, gt=0)
 
 
 @lru_cache

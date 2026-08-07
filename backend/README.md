@@ -1,6 +1,6 @@
-# GeoEstate Intelligence API — Phase 1
+# GeoEstate Intelligence API
 
-This is the runnable backend foundation. It uses FastAPI, asynchronous SQLAlchemy 2.0, PostgreSQL, Alembic, Pydantic v2, and Uvicorn. It exposes only public read endpoints; authentication, AI, maps, satellite analytics, user accounts, and frontend work are intentionally outside Phase 1.
+This is the runnable backend for GeoEstate Intelligence. It uses FastAPI, asynchronous SQLAlchemy 2.0, PostgreSQL/PostGIS, Alembic, Pydantic v2, and Uvicorn. It exposes public read and search endpoints; authentication, user accounts, frontend work, maps, satellite imagery, and recommendation engines remain outside the current scope.
 
 ## Architecture
 
@@ -44,6 +44,33 @@ Phase 3 adds the PostGIS extension, `geometry(Point, 4326)` to every property, a
 
 The dedicated `PropertySearchService` receives a transport-neutral `PropertySearchCriteria` contract. `POST /search` is only an HTTP adapter; future frontend and AI callers must use that same service. It supports case-insensitive locality matching, INR `min_price`/`max_price` filtering (the stored `price_lakh` is converted internally), bedrooms, area bounds, pagination, and safe whitelisted sorting.
 
+## Stage 4 locality intelligence
+
+Migration `20260807_0007_create_locality_statistics_view.py` creates a live PostgreSQL/PostGIS `locality_statistics` view. It calculates listing counts, average/median/minimum/maximum price, average area, average rate per square foot, and PostGIS centroids using SQL aggregation only. It also exposes locality-level availability counts for existing nearby-place enrichment and averages of any populated enrichment scores.
+
+After `alembic upgrade head`, use `GET /api/v1/localities`, `GET /api/v1/localities/{locality}`, `GET /api/v1/localities/top-expensive`, or `GET /api/v1/localities/most-affordable`. The view is intentionally live rather than materialized, so no refresh job is required when property data changes.
+
+## Stage 5 natural-language property search
+
+Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL=gemini-2.5-flash` in `backend/.env`. `POST /api/v1/search/natural` sends the query to Gemini only for JSON-schema-constrained filter extraction, validates that output with Pydantic, and then delegates to the existing `PropertySearchService`. Gemini never receives database access, SQL, or result-ranking responsibility.
+
+The request path remains deliberately narrow: API route → `NaturalLanguageSearchService` → Gemini intent parser → Pydantic validation → existing `PropertySearchService` → repository. Invalid, incomplete, or provider-failed intent never reaches the search service. User input is never used to construct SQL.
+
+```json
+{
+  "query": "Show me 3 BHK apartments under 1 crore in Gachibowli near metro"
+}
+```
+
+Malformed provider output returns `validation_error` without running a database search. Ambiguous requests return `needs_clarification`; otherwise the response includes the extracted filters, property results, and total result count.
+
+Additional supported query examples:
+
+- `Flats near Raidurg metro below 80 lakh`
+- `Ready-to-move villas above 2000 sqft`
+- `Affordable apartments in Kukatpally near hospitals`
+- `2 BHK properties in Kondapur with nearby schools`
+
 ```json
 {
   "location": "Gachibowli",
@@ -85,6 +112,12 @@ uvicorn app.main:app --reload
 The API is available at `http://127.0.0.1:8000`; automatic Swagger documentation is at `/docs` and the OpenAPI document is at `/openapi.json`.
 
 ## Endpoints
+
+- `POST /search` runs the reusable structured property search.
+- `POST /api/v1/search/natural` extracts validated filters, then delegates to the structured search service.
+- `GET /api/v1/localities` returns locality-level statistics from the live PostgreSQL/PostGIS view.
+- `GET /api/v1/localities/{locality}` returns a single locality's statistics.
+- `GET /api/v1/localities/top-expensive` and `GET /api/v1/localities/most-affordable` return price-ranked locality pages.
 
 - `GET /health` — verifies that the API can query PostgreSQL.
 - `GET /properties?limit=50&offset=0` — returns an ordered, offset-paginated listing.

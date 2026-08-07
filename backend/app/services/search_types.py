@@ -31,6 +31,12 @@ class PropertySearchCriteria:
     bedrooms: int | None = None
     min_area: int | None = None
     max_area: int | None = None
+    property_type: str | None = None
+    building_status: str | None = None
+    near_metro: bool = False
+    near_hospital: bool = False
+    near_school: bool = False
+    near_park: bool = False
     limit: int = 20
     offset: int = 0
     sort_by: PropertySortField = PropertySortField.PRICE

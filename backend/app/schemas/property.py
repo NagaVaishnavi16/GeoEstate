@@ -89,12 +89,37 @@ class PropertyListResponse(BaseModel):
 class PropertySearchRequest(BaseModel):
     """HTTP input contract for the shared geospatial-aware property search service."""
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "location": "Gachibowli",
+                    "min_price": 5_000_000,
+                    "max_price": 9_000_000,
+                    "bedrooms": 3,
+                    "near_metro": True,
+                    "limit": 20,
+                    "offset": 0,
+                    "sort_by": "price",
+                    "sort_order": "asc",
+                }
+            ]
+        },
+    )
+
     location: str | None = Field(default=None, min_length=1, max_length=255)
     min_price: Decimal | None = Field(default=None, ge=0, description="Minimum price in INR.")
     max_price: Decimal | None = Field(default=None, ge=0, description="Maximum price in INR.")
     bedrooms: int | None = Field(default=None, ge=0, le=99)
     min_area: int | None = Field(default=None, gt=0, description="Minimum area in square feet.")
     max_area: int | None = Field(default=None, gt=0, description="Maximum area in square feet.")
+    property_type: str | None = Field(default=None, min_length=1, max_length=100)
+    building_status: str | None = Field(default=None, min_length=1, max_length=100)
+    near_metro: bool = False
+    near_hospital: bool = False
+    near_school: bool = False
+    near_park: bool = False
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
     sort_by: PropertySortField = PropertySortField.PRICE

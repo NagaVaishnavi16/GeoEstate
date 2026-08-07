@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request, Response
 from app.api.health import router as health_router
 from app.api.v1.properties import router as properties_router
 from app.api.v1.search import router as search_router
+from app.api.v1.localities import router as localities_router
+from app.api.v1.natural_search import router as natural_search_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import engine
@@ -42,6 +44,8 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(properties_router)
 app.include_router(search_router)
+app.include_router(localities_router)
+app.include_router(natural_search_router)
 
 
 @app.middleware("http")

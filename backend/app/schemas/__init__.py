@@ -8,6 +8,8 @@ from .property import (
     PropertySearchRequest,
     PropertyUpdate,
 )
+from .locality import LocalityListResponse, LocalityStatisticsResponse
+from .natural_search import NaturalSearchRequest, NaturalSearchResponse
 
 __all__ = [
     "PropertyCreate",
@@ -16,4 +18,8 @@ __all__ = [
     "PropertyResponse",
     "PropertySearchRequest",
     "PropertyUpdate",
+    "LocalityListResponse",
+    "LocalityStatisticsResponse",
+    "NaturalSearchRequest",
+    "NaturalSearchResponse",
 ]
