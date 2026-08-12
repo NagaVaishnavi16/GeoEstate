@@ -7,6 +7,10 @@ outputs/*.csv
 # Environment files
 .env
 backend/.env
+frontend/.env
+frontend/node_modules/
+frontend/dist/
+.pnpm-store/
 
 # Python cache
 **/__pycache__/
