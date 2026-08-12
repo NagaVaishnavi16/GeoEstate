@@ -71,6 +71,22 @@ Additional supported query examples:
 - `Affordable apartments in Kukatpally near hospitals`
 - `2 BHK properties in Kondapur with nearby schools`
 
+## Stage 6 deterministic property intelligence scoring
+
+The four property scores are deterministic heuristic indicators, not AI predictions. Run them through the existing enrichment entry point:
+
+```powershell
+cd backend
+python -m scripts.enrich_geocodes --stage scoring
+```
+
+- **Connectivity Score:** available metro, hospital, and school distances contribute 40%, 30%, and 30%. Each contribution is `100 × exp(-distance / decay)`, with 1.5 km, 3 km, and 2.5 km decays respectively; no distance contributes beyond 10 km. Missing distance facts are omitted and the remaining weights are redistributed proportionally.
+- **Green Score:** nearest-park distance and nearby park count contribute 50% each. Park distance uses the same exponential shape with a 1.5 km decay and 10 km cutoff. The park-count contribution is `min(count, 5) / 5 × 100`, so it caps at five parks.
+- **Investment Score:** this is a comparative value indicator, **not financial advice or a return prediction**. It uses property rate relative to the existing SQL-computed locality `average_price_per_sqft` (50%), verified building status (30%), and area relative to the locality `average_built_up_area_sqft` (20%). The status configuration scores the existing values `Ready to move`, `New`, `Resale`, and `Under Construction` at 100, 85, 75, and 60 respectively. If the locality rate benchmark or property rate is unavailable, Investment Score remains null.
+- **Liveability Score:** available Connectivity (40%), Green (30%), and verified nearby amenity availability (30%) are combined. Investment Score is never included. A score stays null when no evidence exists; otherwise missing components are omitted and known component weights are redistributed rather than silently converted to zero.
+
+All persisted scores are rounded to two decimals and clamped to 0–100. Existing non-null scores are preserved by the resumable scoring stage; re-running it fills only remaining score gaps.
+
 ```json
 {
   "location": "Gachibowli",

@@ -3,10 +3,11 @@
 from decimal import Decimal
 from typing import List
 
-from sqlalchemy import Float, and_, cast, distinct, func, or_, select, update
+from sqlalchemy import Float, and_, cast, distinct, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.property import Property
+from app.models.locality_statistics import LocalityStatistics
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.services.search_types import (
     PropertySearchCriteria,
@@ -167,6 +168,102 @@ class PropertyRepository:
         )
         return list(result)
 
+    async def list_missing_nearby_places_for_coordinates(
+        self,
+        coordinates: tuple[tuple[Decimal, Decimal], ...],
+    ) -> list[Property]:
+        """Return only requested coordinate-complete records that still need nearby facts."""
+        if not coordinates:
+            return []
+        return list(
+            await self._session.scalars(
+                select(Property)
+                .where(
+                    tuple_(Property.latitude, Property.longitude).in_(coordinates),
+                    or_(
+                        Property.nearest_metro.is_(None),
+                        Property.nearest_hospital.is_(None),
+                        Property.nearest_school.is_(None),
+                        Property.nearest_park.is_(None),
+                        Property.nearest_metro_distance_m.is_(None),
+                        Property.nearest_hospital_distance_m.is_(None),
+                        Property.nearest_school_distance_m.is_(None),
+                        Property.nearest_park_distance_m.is_(None),
+                        Property.nearby_park_count.is_(None),
+                    ),
+                )
+                .order_by(Property.property_id)
+            )
+        )
+
+    async def list_missing_score_batch(
+        self,
+        *,
+        after_property_id: str | None,
+        batch_size: int,
+    ) -> list[tuple[Property, Decimal | None, Decimal | None]]:
+        """Return properties needing a score with their exact-locality SQL benchmarks."""
+        filters = [
+            or_(
+                Property.investment_score.is_(None),
+                Property.connectivity_score.is_(None),
+                Property.green_score.is_(None),
+                Property.liveability_score.is_(None),
+            )
+        ]
+        if after_property_id is not None:
+            filters.append(Property.property_id > after_property_id)
+        result = await self._session.execute(
+            select(
+                Property,
+                LocalityStatistics.average_price_per_sqft,
+                LocalityStatistics.average_built_up_area_sqft,
+            )
+            .outerjoin(LocalityStatistics, Property.location == LocalityStatistics.locality)
+            .where(*filters)
+            .order_by(Property.property_id)
+            .limit(batch_size)
+        )
+        return [
+            (property_record, average_rate, average_area)
+            for property_record, average_rate, average_area in result.all()
+        ]
+
+    async def fill_missing_scores(
+        self,
+        property_id: str,
+        *,
+        investment_score: Decimal | None,
+        connectivity_score: Decimal | None,
+        green_score: Decimal | None,
+        liveability_score: Decimal | None,
+    ) -> int:
+        """Fill computed score gaps without overwriting an existing persisted score."""
+        supplied_values = {
+            "investment_score": investment_score,
+            "connectivity_score": connectivity_score,
+            "green_score": green_score,
+            "liveability_score": liveability_score,
+        }
+        missing_targets = [
+            getattr(Property, name).is_(None)
+            for name, value in supplied_values.items()
+            if value is not None
+        ]
+        if not missing_targets:
+            return 0
+        values = {
+            name: func.coalesce(getattr(Property, name), value)
+            for name, value in supplied_values.items()
+            if value is not None
+        }
+        result = await self._session.execute(
+            update(Property)
+            .where(Property.property_id == property_id, or_(*missing_targets))
+            .values(**values)
+        )
+        return result.rowcount or 0
+
     async def fill_missing_nearby_places(
         self,
         property_id: str,
@@ -277,7 +374,9 @@ class PropertyRepository:
             )
 
         if criteria.near_metro:
-            filters.append(Property.nearest_metro.is_not(None))
+            # Proximity is established by the computed distance. The OSM display name is
+            # optional metadata and must not exclude a verified metro-distance result.
+            filters.append(Property.nearest_metro_distance_m.is_not(None))
 
         if criteria.near_hospital:
             filters.append(Property.nearest_hospital.is_not(None))

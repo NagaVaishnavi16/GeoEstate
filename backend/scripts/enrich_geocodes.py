@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import AsyncExitStack
+from decimal import Decimal, InvalidOperation
 import logging
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -19,6 +20,7 @@ from app.services.geospatial_enrichment import (
     get_geocoding_coverage_summary,
 )
 from app.services.nearby_places import NearbyPlaceService, OverpassClient
+from app.services.property_scoring import PropertyScoringService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +36,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-size", type=int, default=None, help="Properties per transaction batch.")
     parser.add_argument(
+        "--nearby-coordinate",
+        action="append",
+        default=[],
+        metavar="LATITUDE,LONGITUDE",
+        help="Target only these exact property coordinates for the nearby stage; repeat as needed.",
+    )
+    parser.add_argument(
         "--retry-failed-cache",
         action="store_true",
         help="Re-query cached failed localities once; use after inspecting failure diagnostics.",
@@ -41,19 +50,41 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool) -> None:
+def parse_nearby_coordinates(values: list[str]) -> tuple[tuple[Decimal, Decimal], ...]:
+    """Validate repeatable targeted nearby coordinates without accepting ambiguous input."""
+    coordinates: list[tuple[Decimal, Decimal]] = []
+    for value in values:
+        latitude_text, separator, longitude_text = value.partition(",")
+        if not separator or not latitude_text.strip() or not longitude_text.strip():
+            raise ValueError("--nearby-coordinate must use LATITUDE,LONGITUDE")
+        try:
+            coordinates.append((Decimal(latitude_text.strip()), Decimal(longitude_text.strip())))
+        except InvalidOperation as error:
+            raise ValueError("--nearby-coordinate values must be decimal coordinates") from error
+    return tuple(dict.fromkeys(coordinates))
+
+
+async def run(
+    stage_name: str,
+    batch_size: int | None,
+    retry_failed_cache: bool,
+    nearby_coordinates: tuple[tuple[Decimal, Decimal], ...] = (),
+) -> None:
     """Run implemented enrichment stages against PostgreSQL in committed batches."""
     settings = get_settings()
     effective_batch_size = batch_size or settings.enrichment_batch_size
     if effective_batch_size < 1:
         raise ValueError("batch_size must be at least 1")
     stages = tuple(EnrichmentStage) if stage_name == "all" else (EnrichmentStage(stage_name),)
+    if nearby_coordinates and stages != (EnrichmentStage.NEARBY,):
+        raise ValueError("--nearby-coordinate may only be used with --stage nearby")
 
     async with AsyncSessionFactory() as session:
         property_repository = PropertyRepository(session)
         cache_repository = GeocodeCacheRepository(session)
         needs_geocoding = EnrichmentStage.GEOCODE in stages
         needs_nearby = EnrichmentStage.NEARBY in stages
+        needs_scoring = EnrichmentStage.SCORING in stages
         if needs_geocoding or needs_nearby:
             async with AsyncExitStack() as stack:
                 geocoding_client = (
@@ -79,6 +110,8 @@ async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool)
                         NearbyPlaceService(NearbyPlaceCacheRepository(session), overpass_client, settings)
                         if overpass_client is not None else None
                     ),
+                    property_scoring_service=PropertyScoringService() if needs_scoring else None,
+                    nearby_coordinates=nearby_coordinates or None,
                     retry_failed_cache=retry_failed_cache or settings.geocoding_retry_failed_cache,
                 )
                 summaries = await pipeline.run(stages)
@@ -88,6 +121,8 @@ async def run(stage_name: str, batch_size: int | None, retry_failed_cache: bool)
                 property_repository,
                 batch_size=effective_batch_size,
                 progress_interval=settings.enrichment_progress_interval,
+                property_scoring_service=PropertyScoringService() if needs_scoring else None,
+                nearby_coordinates=nearby_coordinates or None,
             )
             summaries = await pipeline.run(stages)
 
@@ -126,7 +161,14 @@ def main() -> None:
     """Configure logging and run the async geospatial enrichment workflow."""
     configure_logging()
     arguments = build_parser().parse_args()
-    asyncio.run(run(arguments.stage, arguments.batch_size, arguments.retry_failed_cache))
+    asyncio.run(
+        run(
+            arguments.stage,
+            arguments.batch_size,
+            arguments.retry_failed_cache,
+            parse_nearby_coordinates(arguments.nearby_coordinate),
+        )
+    )
 
 
 if __name__ == "__main__":

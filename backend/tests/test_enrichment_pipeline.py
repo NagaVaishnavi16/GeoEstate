@@ -2,10 +2,12 @@
 
 import unittest
 from types import SimpleNamespace
+from decimal import Decimal
 
 from app.services.enrichment_pipeline import EnrichmentStage, PropertyEnrichmentPipeline
 from app.services.geospatial_enrichment import GeospatialEnrichmentSummary
 from app.services.nearby_places import CategoryNearbyResult, NearbyPlace, NearbyPlaceEnrichment
+from app.services.property_scoring import PropertyScoringService
 
 
 class _FakeSession:
@@ -37,6 +39,32 @@ class _FakePropertyRepository:
         self.geometry_repairs: list[list[str]] = []
         self.nearby_batches = [[SimpleNamespace(property_id="hyd-3", latitude=1, longitude=1)], []]
         self.nearby_updates: list[str] = []
+        self.targeted_nearby_batches: list[list[object]] = [[SimpleNamespace(property_id="hyd-target", latitude=1, longitude=1)]]
+        self.score_batches = [
+            [
+                (
+                    SimpleNamespace(
+                        property_id="hyd-4",
+                        rate_per_sqft=6000,
+                        area_sqft=1500,
+                        building_status="Ready to move",
+                        nearest_metro_distance_m=100,
+                        nearest_hospital_distance_m=100,
+                        nearest_school_distance_m=100,
+                        nearest_park_distance_m=100,
+                        nearby_park_count=2,
+                        nearest_metro="Metro",
+                        nearest_hospital="Hospital",
+                        nearest_school="School",
+                        nearest_park="Park",
+                    ),
+                    6000,
+                    1500,
+                )
+            ],
+            [],
+        ]
+        self.score_updates: list[str] = []
 
     async def list_missing_coordinate_batch(self, **_: object) -> list[object]:
         return self.coordinate_batches.pop(0)
@@ -53,6 +81,17 @@ class _FakePropertyRepository:
 
     async def fill_missing_nearby_places(self, property_id: str, **_: object) -> int:
         self.nearby_updates.append(property_id)
+        return 1
+
+    async def list_missing_nearby_places_for_coordinates(self, coordinates: object) -> list[object]:
+        self.targeted_coordinates = coordinates
+        return self.targeted_nearby_batches.pop(0)
+
+    async def list_missing_score_batch(self, **_: object) -> list[object]:
+        return self.score_batches.pop(0)
+
+    async def fill_missing_scores(self, property_id: str, **_: object) -> int:
+        self.score_updates.append(property_id)
         return 1
 
 
@@ -125,6 +164,23 @@ class PropertyEnrichmentPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.flushes, 1)
         self.assertEqual(repository.nearby_updates, ["hyd-3"])
 
+    async def test_nearby_stage_can_target_only_requested_coordinate_records(self) -> None:
+        session = _FakeSession()
+        repository = _FakePropertyRepository()
+        repository.nearby_updates = []
+        pipeline = PropertyEnrichmentPipeline(
+            session,
+            repository,
+            batch_size=100,
+            progress_interval=50,
+            nearby_place_service=_FakeNearbyPlaceService(),
+            nearby_coordinates=((Decimal("17.443622"), Decimal("78.351964")),),
+        )
+        summaries = await pipeline.run((EnrichmentStage.NEARBY,))
+        self.assertEqual(summaries[0].properties_processed, 1)
+        self.assertEqual(repository.nearby_updates, ["hyd-target"])
+        self.assertEqual(repository.targeted_coordinates, ((Decimal("17.443622"), Decimal("78.351964")),))
+
     async def test_nearby_stage_rolls_back_then_can_resume_from_the_same_batch(self) -> None:
         session = _FakeSession()
         repository = _FakePropertyRepository()
@@ -149,3 +205,19 @@ class PropertyEnrichmentPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         await resumed.run((EnrichmentStage.NEARBY,))
         self.assertEqual(repository.nearby_updates, ["hyd-3"])
+
+    async def test_scoring_stage_commits_guarded_score_updates(self) -> None:
+        session = _FakeSession()
+        repository = _FakePropertyRepository()
+        pipeline = PropertyEnrichmentPipeline(
+            session,
+            repository,
+            batch_size=100,
+            progress_interval=50,
+            property_scoring_service=PropertyScoringService(),
+        )
+        summaries = await pipeline.run((EnrichmentStage.SCORING,))
+        self.assertEqual(summaries[0].properties_processed, 1)
+        self.assertEqual(summaries[0].properties_updated, 1)
+        self.assertEqual(repository.score_updates, ["hyd-4"])
+        self.assertEqual(session.commits, 1)

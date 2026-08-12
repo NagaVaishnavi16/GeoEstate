@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 import logging
 
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.property import PropertyRepository
 from app.services.geospatial_enrichment import PropertyGeospatialService
 from app.services.nearby_places import NearbyPlaceEnrichment, NearbyPlaceService
+from app.services.property_scoring import PropertyScoringInput, PropertyScoringService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +23,7 @@ class EnrichmentStage(StrEnum):
     GEOCODE = "geocode"
     GEOMETRY = "geometry"
     NEARBY = "nearby"
+    SCORING = "scoring"
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,8 @@ class PropertyEnrichmentPipeline:
         progress_interval: int,
         geospatial_service: PropertyGeospatialService | None = None,
         nearby_place_service: NearbyPlaceService | None = None,
+        property_scoring_service: PropertyScoringService | None = None,
+        nearby_coordinates: tuple[tuple[Decimal, Decimal], ...] | None = None,
         retry_failed_cache: bool = False,
     ) -> None:
         self._session = session
@@ -55,6 +60,8 @@ class PropertyEnrichmentPipeline:
         self._progress_interval = progress_interval
         self._geospatial_service = geospatial_service
         self._nearby_place_service = nearby_place_service
+        self._property_scoring_service = property_scoring_service
+        self._nearby_coordinates = nearby_coordinates
         self._retry_failed_cache = retry_failed_cache
 
     async def run(self, stages: tuple[EnrichmentStage, ...]) -> list[StageRunSummary]:
@@ -67,6 +74,8 @@ class PropertyEnrichmentPipeline:
                 summaries.append(await self._run_geometry_stage())
             elif stage is EnrichmentStage.NEARBY:
                 summaries.append(await self._run_nearby_stage())
+            elif stage is EnrichmentStage.SCORING:
+                summaries.append(await self._run_scoring_stage())
         return summaries
 
     async def _run_geocode_stage(self) -> StageRunSummary:
@@ -160,11 +169,20 @@ class PropertyEnrichmentPipeline:
         cursor: str | None = None
         processed = updated = provider_queries = cache_hits = failed_requests = 0
         next_progress_log = self._progress_interval
+        targeted_batch_processed = False
         while True:
-            batch = await self._property_repository.list_missing_nearby_place_batch(
-                after_property_id=cursor,
-                batch_size=self._batch_size,
-            )
+            if self._nearby_coordinates is None:
+                batch = await self._property_repository.list_missing_nearby_place_batch(
+                    after_property_id=cursor,
+                    batch_size=self._batch_size,
+                )
+            elif targeted_batch_processed:
+                break
+            else:
+                batch = await self._property_repository.list_missing_nearby_places_for_coordinates(
+                    self._nearby_coordinates
+                )
+                targeted_batch_processed = True
             if not batch:
                 break
             cursor = batch[-1].property_id
@@ -203,6 +221,65 @@ class PropertyEnrichmentPipeline:
             provider_queries=provider_queries,
             cache_hits=cache_hits,
             failed_localities=failed_requests,
+        )
+
+    async def _run_scoring_stage(self) -> StageRunSummary:
+        """Fill missing deterministic scores using property facts and locality SQL benchmarks."""
+        if self._property_scoring_service is None:
+            raise RuntimeError("Scoring stage requires a configured PropertyScoringService")
+        cursor: str | None = None
+        processed = updated = 0
+        next_progress_log = self._progress_interval
+        while True:
+            batch = await self._property_repository.list_missing_score_batch(
+                after_property_id=cursor,
+                batch_size=self._batch_size,
+            )
+            if not batch:
+                break
+            cursor = batch[-1][0].property_id
+            try:
+                for property_record, locality_average_rate, locality_average_area in batch:
+                    scores = self._property_scoring_service.score(
+                        PropertyScoringInput(
+                            rate_per_sqft=property_record.rate_per_sqft,
+                            area_sqft=property_record.area_sqft,
+                            building_status=property_record.building_status,
+                            locality_average_price_per_sqft=locality_average_rate,
+                            locality_average_area_sqft=locality_average_area,
+                            nearest_metro_distance_m=property_record.nearest_metro_distance_m,
+                            nearest_hospital_distance_m=property_record.nearest_hospital_distance_m,
+                            nearest_school_distance_m=property_record.nearest_school_distance_m,
+                            nearest_park_distance_m=property_record.nearest_park_distance_m,
+                            nearby_park_count=property_record.nearby_park_count,
+                            nearest_metro=property_record.nearest_metro,
+                            nearest_hospital=property_record.nearest_hospital,
+                            nearest_school=property_record.nearest_school,
+                            nearest_park=property_record.nearest_park,
+                        )
+                    )
+                    updated += await self._property_repository.fill_missing_scores(
+                        property_record.property_id,
+                        investment_score=scores.investment_score,
+                        connectivity_score=scores.connectivity_score,
+                        green_score=scores.green_score,
+                        liveability_score=scores.liveability_score,
+                    )
+                await self._session.commit()
+            except Exception:
+                await self._session.rollback()
+                raise
+            processed += len(batch)
+            next_progress_log = self._log_progress(
+                EnrichmentStage.SCORING,
+                processed,
+                updated,
+                next_progress_log,
+            )
+        return StageRunSummary(
+            stage=EnrichmentStage.SCORING,
+            properties_processed=processed,
+            properties_updated=updated,
         )
 
     async def _persist_nearby_result(

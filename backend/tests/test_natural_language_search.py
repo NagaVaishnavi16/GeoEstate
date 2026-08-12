@@ -144,6 +144,27 @@ class NaturalLanguageSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search.criteria.location, "Gachibowli")
         self.assertTrue(search.criteria.near_metro)
 
+    async def test_gachibowli_near_metro_query_preserves_metro_proximity_filter(self) -> None:
+        filters = ExtractedPropertyFilters(
+            property_type="Apartment",
+            bhk=3,
+            locality="Gachibowli",
+            price_max=10_000_000,
+            nearby=NearbyIntentFilters(metro=True),
+        )
+        search = _SearchService()
+        response = await NaturalLanguageSearchService(_StaticParser(filters), search).search(
+            query="Show me 3 BHK apartments under 1 crore in Gachibowli near metro",
+            limit=20,
+            offset=0,
+        )
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(search.criteria.location, "Gachibowli")
+        self.assertEqual(search.criteria.max_price, 10_000_000)
+        self.assertEqual(search.criteria.bedrooms, 3)
+        self.assertEqual(search.criteria.property_type, "Apartment")
+        self.assertTrue(search.criteria.near_metro)
+
     async def test_ambiguity_returns_clarification_without_search(self) -> None:
         filters = ExtractedPropertyFilters(
             needs_clarification=True,
