@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getInsights } from "./api/insights";
+import { InsightsPanel } from "./components/InsightsPanel";
+import { SearchInsights } from "./components/SearchInsights";
 import { naturalSearch, ApiError } from "./api/propertySearch";
 import { PropertyCard } from "./components/PropertyCard";
 import { PropertyMap } from "./components/PropertyMap";
@@ -16,6 +19,12 @@ export default function App() {
   const [query, setQuery] = useState(exampleQuery);
   const [searchState, setSearchState] = useState({ status: "idle", results: [], total: 0, filters: null, message: "" });
   const [selectedId, setSelectedId] = useState(null);
+  const [insights, setInsights] = useState(null);
+  const [insightsError, setInsightsError] = useState(false);
+
+  useEffect(() => {
+    getInsights().then(setInsights).catch(() => setInsightsError(true));
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
@@ -61,8 +70,10 @@ export default function App() {
             <div className="card-list">{results.map((property) => <PropertyCard key={property.property_id} property={property} isSelected={property.property_id === selectedId} onSelect={setSelectedId} />)}</div>
             <PropertyMap properties={results} selectedId={selectedId} onSelect={setSelectedId} />
           </div>}
+          {total > 0 && <SearchInsights properties={results} selectedId={selectedId} onSelect={setSelectedId} />}
         </>}
       </section>
+      {status === "completed" && <InsightsPanel insights={insights} error={insightsError} />}
     </main>
   );
 }

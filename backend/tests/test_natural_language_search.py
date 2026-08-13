@@ -117,6 +117,19 @@ class NaturalLanguageSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, "validation_error")
         self.assertIsNone(search.criteria)
 
+    async def test_provider_http_failure_returns_failure_without_search(self) -> None:
+        request = httpx.Request("POST", "https://example.test")
+        response = httpx.Response(503, request=request)
+        result = await _ParserWithException(httpx.HTTPStatusError("unavailable", request=request, response=response)).parse("anything")
+        self.assertIsInstance(result, ParserFailure)
+
+        search = _SearchService()
+        api_response = await NaturalLanguageSearchService(_StaticParser(result), search).search(
+            query="anything", limit=20, offset=0
+        )
+        self.assertEqual(api_response.status, "validation_error")
+        self.assertIsNone(search.criteria)
+
     async def test_missing_api_key_returns_failure_without_provider_request(self) -> None:
         class _MissingKeySettings:
             gemini_api_key = None

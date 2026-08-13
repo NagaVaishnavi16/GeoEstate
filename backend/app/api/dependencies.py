@@ -8,12 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db_session
 from app.core.config import get_settings
 from app.repositories.property import PropertyRepository
+from app.repositories.market_insights import MarketInsightsRepository
 from app.repositories.locality_statistics import LocalityStatisticsRepository
 from app.services.locality_intelligence import LocalityIntelligenceService
 from app.services.gemini_parser import GeminiParser
 from app.services.natural_language_search import NaturalLanguageSearchService
 from app.services.property import PropertyService
 from app.services.search import PropertySearchService
+from app.services.market_insights import MarketInsightsService
 
 
 async def get_property_service(session: Annotated[AsyncSession, Depends(get_db_session)]) -> PropertyService:
@@ -43,3 +45,10 @@ async def get_natural_language_search_service(
         GeminiParser(get_settings()),
         PropertySearchService(PropertyRepository(session)),
     )
+
+
+async def get_market_insights_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> MarketInsightsService:
+    """Construct a request-scoped service for read-only frontend analytics."""
+    return MarketInsightsService(MarketInsightsRepository(session))

@@ -23,3 +23,5 @@ The Vite app runs at `http://localhost:5173`. The FastAPI environment must allow
 ## Integration
 
 The only frontend API call is `POST /api/v1/search/natural`. A completed response supplies cards and map markers directly from `results`, including coordinates, nearby-place data, and deterministic score fields. Leaflet uses OpenStreetMap tiles; no Google Maps or Places API is used.
+
+The small Insights section reads `GET /api/v1/insights`. It presents current SQL-backed listing distributions, locality rates, score coverage, locality-relative rate outliers, and verified nearby-place coverage. The interface labels all observations as descriptive; it does not make causal or financial-return claims.
